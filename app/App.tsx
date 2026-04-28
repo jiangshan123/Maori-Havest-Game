@@ -98,22 +98,24 @@ const basketStyles = `
     box-shadow: inset 0 3px 8px rgba(0,0,0,0.2);
   }
   
-  /* 篮子把手 */
+  /* 篮子把手 - 现在是手的位置 */
   .basket-handle {
     position: absolute;
-    top: -40px;
+    top: -50px;
     left: 50%;
     transform: translateX(-50%);
-    width: 120px;
-    height: 50px;
-    border: 4px solid #B8802A;
-    border-bottom: none;
-    border-radius: 70% 70% 0 0 / 100% 100% 0 0;
-    box-shadow: 
-      inset -2px 2px 6px rgba(255,255,255,0.2),
-      inset 2px 2px 6px rgba(0,0,0,0.3),
-      -4px -6px 12px rgba(0,0,0,0.4);
-    background: linear-gradient(90deg, #9E6820 0%, #C89030 50%, #9E6820 100%);
+    font-size: 60px;
+    pointer-events: none;
+    z-index: 10;
+    filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));
+    animation: basketHandWave 0.8s ease-in-out infinite;
+  }
+
+  @keyframes basketHandWave {
+    0%, 100% { transform: translateX(-50%) rotate(0deg) scaleX(1); }
+    25% { transform: translateX(-50%) rotate(-15deg) scaleX(0.95); }
+    50% { transform: translateX(-50%) rotate(-25deg) scaleX(0.9); }
+    75% { transform: translateX(-50%) rotate(-15deg) scaleX(0.95); }
   }
   
   /* 篮子里的水果 */
@@ -147,19 +149,10 @@ const basketStyles = `
     will-change: transform;
   }
   
-  .hand-left {
-    animation: palmFlex 0.8s ease-in-out infinite;
-  }
-  
   .hand-right {
     animation: fingerPoint 0.6s ease-in-out infinite;
   }
-  
-  @keyframes palmFlex {
-    0%, 100% { transform: scaleX(1) rotate(0deg); }
-    50% { transform: scaleX(0.95) rotate(-5deg); }
-  }
-  
+
   @keyframes fingerPoint {
     0%, 100% { transform: scaleY(1) rotate(0deg); }
     50% { transform: scaleY(0.9) rotate(2deg); }
@@ -206,6 +199,8 @@ const MAORI_ENCOURAGEMENTS = [
   { maori: "Kia ora!", english: "Be well!" },
   { maori: "Mīharo!", english: "Amazing!" },
   { maori: "Ka rawe!", english: "Awesome!" },
+  { maori: "Whakatīnana!", english: "Celebrate!" },
+  { maori: "E hoa!", english: "Well done, friend!" },
 ];
 
 // 毛利语鼓励语 - 没接住时
@@ -255,13 +250,26 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState<
     LeaderboardEntry[]
   >([]);
-  const [timeRemaining, setTimeRemaining] = useState(60); // 60秒倒计时
+  const [timeRemaining, setTimeRemaining] = useState(180); // 3分钟倒计时
   const gameAreaRef = useRef<HTMLDivElement>(null);
   const nextFruitId = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const encouragementIdRef = useRef(0);
   const isShowingEncouragementRef = useRef(false);
-  const gameTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const gameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 朗读slogan
+  const speakEncouragement = (text: string) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.2;
+      utterance.pitch = 1.1;
+      utterance.volume = 1;
+      utterance.lang = 'mi';
+      window.speechSynthesis.speak(utterance);
+    }
+  };
 
   // 摄像头和手势识别相关
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -273,10 +281,9 @@ export default function App() {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [cameraInitialized, setCameraInitialized] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<string>("unknown");
-  const initCameraRef = useRef<() => Promise<void>>();
+  const initCameraRef = useRef<(() => Promise<void>) | null>(null);
   
   // 手部位置状态 - 用于在屏幕上显示动画的手
-  const [leftHandPos, setLeftHandPos] = useState<{ x: number; y: number } | null>(null);
   const [rightHandPos, setRightHandPos] = useState<{ x: number; y: number } | null>(null);
 
   // Load leaderboard from localStorage on mount
@@ -459,103 +466,65 @@ export default function App() {
   }, []);
 
   // 处理手势识别结果 - 仅更新手部位置状态，不绘制canvas
-const onHandsResults = (results: Results) => {
+  const onHandsResults = (results: Results) => {
     if (!results.multiHandLandmarks || !results.multiHandedness) {
-      setLeftHandPos(null);
       setRightHandPos(null);
       return;
     }
 
-    // 处理检测到的手
-    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
-      const landmarks = results.multiHandLandmarks[i];
-      // 注意：MediaPipe 的 handedness 会因为镜像原因导致左右反转
-      // 这里的 label 是基于摄像头画面的，所以我们需要反向思维
-      const rawHandedness = results.multiHandedness[i].label; 
+    // 将每只手的必要信息抽取出来
+    const detectedHands = results.multiHandLandmarks.map((landmarks, i) => ({
+      landmarks,
+      label: results.multiHandedness?.[i]?.label || "",
+      wristX: landmarks[0].x,
+      wristY: landmarks[0].y,
+      indexX: landmarks[8].x,
+      indexY: landmarks[8].y,
+    }));
 
-      // 获取手腕位置 (landmark 0)
-      const wrist = landmarks[0];
-      // 获取食指指尖位置 (landmark 8)
-      const indexTip = landmarks[8];
+    // 位置优先分配：按 wristX 排序选择
+    // 镜像下：wristX 大 = 用户左手, wristX 小 = 用户右手
+    let basketHand = null as typeof detectedHands[number] | null;
+    let fingerHand = null as typeof detectedHands[number] | null;
 
-      // 修正逻辑：
-      // 在镜像模式下，MediaPipe 标记为 "Right" 的通常是你真实的左手
-      // 我们通过 (wrist.x) 直接使用原始坐标，因为在镜像视频中，
-      // 物理左手出现在画面右侧（x值较大），这正好对应篮子移动到右侧。
-      
-      if (rawHandedness === "Right") { // 这里的 "Right" 实际上对应用户的物理左手
-        // 左手控制篮子
-        if (gameStarted) {
-          // 使用原始 x 坐标 (0.0 - 1.0)，无需 1-x，以匹配镜像直觉
-          const basketXPos = wrist.x * 100; 
-          const newBasketX = Math.max(5, Math.min(95, basketXPos));
-          setBasketX(newBasketX);
-          basketXRef.current = newBasketX;
-        }
-
-        // 屏幕上显示左手
-        const screenWidth = window.innerWidth;
-        const screenHeight = window.innerHeight;
-        setLeftHandPos({
-          x: wrist.x * screenWidth,
-          y: wrist.y * screenHeight,
-        });
-      } else if (rawHandedness === "Left") { // 这里的 "Left" 对应用户的物理右手
-        // 右手触碰水果
-        const fingerX = indexTip.x * 100;
-        const fingerY = indexTip.y * 100;
-
-        if (gameStarted) {
-          checkFingerTouchFruit(fingerX, fingerY);
-        }
-
-        // 屏幕上显示右手
-        const screenWidth = window.innerWidth;
-        const screenHeight = window.innerHeight;
-        setRightHandPos({
-          x: indexTip.x * screenWidth,
-          y: indexTip.y * screenHeight,
-        });
-      }
-    }
-  };
-
-  // 检查右手是否触碰到水果
-  const checkFingerTouchFruit = (fingerX: number, fingerY: number) => {
-    if (!gameStarted || !gameAreaRef.current) return;
-
-    // 防止短时间内重复触发
-    const now = Date.now();
-    if (now - lastRightHandTouchRef.current < 300) return; // 减少防抖时间
-
-    // 顶部水果区域大约在屏幕顶部 5-30%（更宽松的范围）
-    if (fingerY < 5 || fingerY > 30) {
-      console.log(`Finger Y out of range: ${fingerY.toFixed(1)} (need 5-30)`);
-      return;
+    if (detectedHands.length === 1) {
+      // 只有一只手时，默认用来控制篮子
+      basketHand = detectedHands[0];
+    } else if (detectedHands.length >= 2) {
+      // 两只手都在时，按 wristX 倒序排：大在前(用户左手=篮子), 小在后(用户右手=触碰)
+      const sortedHands = [...detectedHands].sort((a, b) => b.wristX - a.wristX);
+      basketHand = sortedHands[0]; // wristX 最大 = 用户左手
+      fingerHand = sortedHands[1] || null; // wristX 最小 = 用户右手
     }
 
-    // 检查每个水果的位置
-    topFruits.forEach((fruit, index) => {
-      const fruitX =
-        (100 / topFruits.length) * index +
-        100 / topFruits.length / 2;
-      const distance = Math.abs(fingerX - fruitX);
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
 
-      console.log(`Fruit ${index} (${fruit.name}): X=${fruitX.toFixed(1)}, Distance=${distance.toFixed(1)}, Target=${targetFruit.name}`);
+    console.debug(`Detected hands: ${detectedHands.length}`, detectedHands.map(h => ({wristX: h.wristX, label: h.label})));
+    if (basketHand) console.debug("Selected basketHand:", { wristX: basketHand.wristX, label: basketHand.label });
+    if (fingerHand) console.debug("Selected fingerHand:", { indexX: fingerHand.indexX, label: fingerHand.label });
 
-      // 如果手指触碰到水果（距离小于阈值）
-      // 降低距离阈值，或者允许触碰任何水果（不只是目标）
-      if (distance < 12) { // 增加阈值从 8 到 12
-        if (fruit.name === targetFruit.name) {
-          console.log(`✓ Caught fruit: ${fruit.name}`);
-          lastRightHandTouchRef.current = now;
-          // 触发水果掉落
-          handleFruitClick(fruit, index);
-        } else {
-          console.log(`✗ Wrong fruit touched: ${fruit.name} (target is ${targetFruit.name})`);
-        }
-      }
-    });
+    // 如果有篮子手，更新篮子位置（将视频坐标映射到屏幕坐标，水平翻转以修正镜像）
+    if (basketHand) {
+      const basketXPct = Math.max(
+        5,
+        Math.min(95, (1 - basketHand.wristX) * 100),
+      );
+      // 应用平滑过滤：混合 80% 当前值 + 20% 旧值，使移动更稳定
+      const smoothedX = basketXRef.current * 0.2 + basketXPct * 0.8;
+      setBasketX(smoothedX);
+      basketXRef.current = smoothedX;
+    }
+
+    // 如果有手指手，只更新右手显示位置（触碰检测由 effect 处理）
+    if (fingerHand) {
+      setRightHandPos({
+        x: (1 - fingerHand.indexX) * screenWidth,
+        y: fingerHand.indexY * screenHeight,
+      });
+    } else {
+      setRightHandPos(null);
+    }
   };
 
   // 游戏倒计时
@@ -576,17 +545,50 @@ const onHandsResults = (results: Results) => {
     };
   }, [gameStarted, timeRemaining]);
 
-  // 背景音乐控制
+  // 游戏页面加载时，初始化音乐（不需要等待游戏开始）
   useEffect(() => {
-    if (gameStarted && audioRef.current) {
-      audioRef.current.play().catch((error) => {
-        console.log("Audio play failed:", error);
-      });
-    } else if (!gameStarted && audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
+    // 在组件挂载时设置音乐音量
+    if (audioRef.current) {
+      audioRef.current.volume = 0.5;
+      console.log("🎵 Audio element ready");
     }
-  }, [gameStarted]);
+    
+    // 尝试自动播放背景音乐
+    const tryAutoPlay = () => {
+      if (audioRef.current) {
+        audioRef.current.volume = 0.5;
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log("✅ Background music is playing");
+            })
+            .catch((err) => {
+              console.log("ℹ️ Autoplay blocked, waiting for user interaction...", err.message);
+            });
+        }
+      }
+    };
+    
+    // 加载后立即尝试
+    setTimeout(tryAutoPlay, 500);
+    
+    // 也在用户交互时尝试
+    const handleUserInteraction = () => {
+      console.log("👆 User interaction detected, attempting to play music...");
+      tryAutoPlay();
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+    };
+    
+    document.addEventListener('click', handleUserInteraction);
+    document.addEventListener('touchstart', handleUserInteraction);
+    
+    return () => {
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+    };
+  }, []);
 
   // 处理鼓励语队列
   useEffect(() => {
@@ -629,35 +631,59 @@ const onHandsResults = (results: Results) => {
     }
   }, [gameStarted]);
 
-  // 鼠标控制作为后备方案（当摄像头不可用时）
+  // 游戏开始时自动初始化摄像头和手势检测
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (gameAreaRef.current && gameStarted) {
-        const rect = gameAreaRef.current.getBoundingClientRect();
-        const x = ((e.clientX - rect.left) / rect.width) * 100;
-        const newBasketX = Math.max(5, Math.min(95, x));
-
-        setBasketX(newBasketX);
-        basketXRef.current = newBasketX;
-      }
-    };
-
-    // 只有当摄像头未准备好时才使用鼠标控制
-    if (!cameraReady) {
-      window.addEventListener("mousemove", handleMouseMove);
-      return () =>
-        window.removeEventListener("mousemove", handleMouseMove);
+    if (gameStarted && !cameraReady && initCameraRef.current) {
+      console.log("[Game Start] Auto-initializing camera and hand detection...");
+      initCameraRef.current();
     }
-  }, [gameStarted, cameraReady]);
+  }, [gameStarted]);
+
+  // 简化的右手触碰检测：直接通过 rightHandPos 检测是否触碰到目标水果
+  useEffect(() => {
+    if (!gameStarted || !rightHandPos || !topFruits || topFruits.length === 0) return;
+
+    const fingerXPct = (rightHandPos.x / window.innerWidth) * 100;
+    const fingerYPct = (rightHandPos.y / window.innerHeight) * 100;
+
+    // 防止短时间内重复触发（3秒，给用户足够时间准备接下一个）
+    const now = Date.now();
+    if (now - lastRightHandTouchRef.current < 3000) return;
+
+    // 顶部水果区域大约在屏幕顶部 0-80%
+    if (fingerYPct < 0 || fingerYPct > 80) return;
+
+    console.log(`[RightHand] At screen (${fingerXPct.toFixed(1)}, ${fingerYPct.toFixed(1)}) checking ${topFruits.length} fruits`);
+
+    // 检查每个水果的位置
+    topFruits.forEach((fruit, index) => {
+      const fruitX =
+        (100 / topFruits.length) * index +
+        100 / topFruits.length / 2;
+      const distance = Math.abs(fingerXPct - fruitX);
+
+      if (distance < 8) {
+        console.log(`[RightHand] HIT fruit #${index} ${fruit.name} distance=${distance.toFixed(1)}`);
+        if (fruit.name === targetFruit.name) {
+          console.log(`[RightHand] ✓✓✓ TARGET FRUIT HIT: ${fruit.name}`);
+          lastRightHandTouchRef.current = now;
+          handleFruitClick(fruit, index);
+        }
+      }
+    });
+  }, [gameStarted, rightHandPos, topFruits, targetFruit]);
 
   // 点击水果
   const handleFruitClick = (
     fruit: (typeof NZ_FRUITS)[0],
     index: number,
   ) => {
+    console.log(`[handleFruitClick] Called with fruit=${fruit.name}, index=${index}, gameStarted=${gameStarted}`);
     if (!gameStarted) return;
 
+    console.log(`[handleFruitClick] Checking: fruit.name=${fruit.name} vs targetFruit.name=${targetFruit.name}`);
     if (fruit.name === targetFruit.name) {
+      console.log(`[handleFruitClick] MATCH! Creating falling fruit...`);
       // 正确的水果 - 创建掉落动画
       const fruitPosition =
         (100 / topFruits.length) * index +
@@ -667,10 +693,15 @@ const onHandsResults = (results: Results) => {
         fruit: fruit,
         x: fruitPosition,
       };
+      console.log(`[handleFruitClick] FallingFruit created:`, newFallingFruit);
       setFallingFruits((prev) => [...prev, newFallingFruit]);
+      
+      // 立即选择下一个目标水果（防止同一水果被触碰多次）
+      selectNewTarget();
 
-      // 3秒后检查是否接住并移除
+      // 1.5秒后检查是否接住并移除
       setTimeout(() => {
+        console.log(`[checkCatch timeout] Checking if basket caught fruit at x=${fruitPosition}`);
         checkCatch(newFallingFruit);
       }, 1500);
     }
@@ -681,14 +712,16 @@ const onHandsResults = (results: Results) => {
     const distance = Math.abs(
       fallingFruit.x - basketXRef.current,
     );
+    console.log(`[checkCatch] Fruit at x=${fallingFruit.x.toFixed(1)}, basket at x=${basketXRef.current.toFixed(1)}, distance=${distance.toFixed(1)}`);
 
-    if (distance < 4) {
+    if (distance < 6) {
       // 接住了！
+      console.log(`[checkCatch] SUCCESS! Caught fruit! Score +10`);
       setScore((prev) => prev + 10);
       showEncouragement();
-      selectNewTarget();
     } else {
       // 没接住
+      console.log(`[checkCatch] MISS! Distance ${distance.toFixed(1)} > 4`);
       showMissEncouragement();
     }
 
@@ -705,10 +738,13 @@ const onHandsResults = (results: Results) => {
         Math.floor(Math.random() * MAORI_ENCOURAGEMENTS.length)
       ];
     const id = encouragementIdRef.current++;
+    const fullText = `${random.maori} ${random.english}`;
     setEncouragementQueue((prev) => [
       ...prev,
-      { id, text: `${random.maori} ${random.english}` },
+      { id, text: fullText },
     ]);
+    // 朗读鼓励语
+    speakEncouragement(fullText);
   };
 
   // 显示未接住的鼓励语
@@ -750,8 +786,19 @@ const onHandsResults = (results: Results) => {
     setScore(0);
     setFallingFruits([]);
     setEncouragementQueue([]);
-    setTimeRemaining(60); // 重置倒计时
+    setTimeRemaining(180); // 重置倒计时为3分钟
     lastRightHandTouchRef.current = 0; // 重置手势触碰计时器
+    
+    // 确保音乐播放
+    if (audioRef.current) {
+      audioRef.current.volume = 0.4;
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((error) => {
+          console.log("🔇 Autoplay blocked, user interaction may be required");
+        });
+      }
+    }
   };
 
   // 结束游戏并显示排行榜
@@ -988,62 +1035,43 @@ const onHandsResults = (results: Results) => {
         playsInline
       />
 
-      {/* 启用摄像头按钮 - 游戏开始后显示 */}
-      {gameStarted && !cameraReady && (
+      {/* 摄像头状态指示 - 游戏开始后显示 */}
+      {gameStarted && (
         <div className="absolute top-4 left-4 z-40">
-          {!permissionDenied ? (
-            <button
-              onClick={async () => {
-                if (initCameraRef.current) {
-                  await initCameraRef.current();
-                }
-              }}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold shadow-lg transition-all flex items-center gap-2"
-            >
-              <div className="text-xl animate-bounce">🎥</div>
-              Enable Hands
-            </button>
+          {cameraReady ? (
+            <div className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-bold flex items-center gap-2">
+              <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+              Camera Ready
+            </div>
           ) : (
-            <div className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-bold">
-              📷 Camera Blocked
+            <div className="px-4 py-2 bg-yellow-600 text-white rounded-lg text-sm font-bold flex items-center gap-2">
+              <div className="animate-spin text-lg">⏳</div>
+              Initializing Camera...
             </div>
           )}
         </div>
       )}
 
-      {/* 动画的左手 - 绿色手掌 */}
-      {cameraReady && leftHandPos && (
-        <div
-          className="hand hand-left"
-          style={{
-            left: `${leftHandPos.x}px`,
-            top: `${leftHandPos.y}px`,
-            transform: "translate(-50%, -50%) scaleX(-1)",
-          }}
-        >
-          👋
-        </div>
-      )}
-
       {/* 动画的右手 - 红色手指 */}
-      {cameraReady && rightHandPos && (
+      {rightHandPos && (
         <div
           className="hand hand-right"
           style={{
             left: `${rightHandPos.x}px`,
             top: `${rightHandPos.y}px`,
-            transform: "translate(-50%, -50%) scaleX(-1)",
+            transform: "translate(-50%, -50%)",
           }}
         >
           👆
         </div>
       )}
 
-      {/* 底部篮子 - CSS绘制 */}
+      {/* 背景音乐 */}
       <audio
         ref={audioRef}
         loop
-        src="https://cdn.pixabay.com/audio/2022/03/10/audio_c8a7e5c3ff.mp3"
+        preload="auto"
+        src="/Temple-Run-Running-Theme.mp3"
       />
 
       {/* 分数和目标提示 */}
@@ -1243,7 +1271,7 @@ const onHandsResults = (results: Results) => {
 
       {/* 底部篮子 - CSS绘制 */}
       <div
-        className="absolute bottom-8 z-20 transition-all duration-75 ease-linear"
+        className="absolute bottom-8 z-20 transition-all duration-200 ease-linear"
         style={{
           left: `${basketX}%`,
           transform: "translateX(-50%)",
@@ -1260,7 +1288,7 @@ const onHandsResults = (results: Results) => {
             ease: "easeInOut",
           }}
         >
-          <div className="basket-handle"></div>
+          <div className="basket-handle">👋</div>
           <div className="basket-top"></div>
           <div className="basket-rim"></div>
           <div className="basket-middle">
