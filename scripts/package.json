@@ -1,0 +1,9 @@
+{
+  "name": "generate-audio",
+  "version": "1.0.0",
+  "description": "生成鼓励语音频文件",
+  "main": "generate_audio.py",
+  "scripts": {
+    "generate-audio": "python3 generate_audio.py"
+  }
+}
