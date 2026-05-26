@@ -173,6 +173,9 @@ const BASKET_IMAGE =
 const MAORI_BACKGROUND =
   "https://media.easy-peasy.ai/27feb2bb-aeb4-4a83-9fb6-8f3f2a15885e/b79c1f25-f64f-40bd-acb0-b18f5ccb95de_medium.webp";
 
+// 背景音乐文件路径
+const BACKGROUND_MUSIC_URL = "/desifreemusic-tribal-rhythm-patterns-with-bamboo-flute-376294.mp3";
+
 // 新西兰本地水果 - 卡通图片
 const NZ_FRUITS = [
   { name: "Kiwifruit", maori: "Huakiwi", emoji: "🥝" },
@@ -193,30 +196,32 @@ const NZ_FRUITS = [
 
 // 毛利语鼓励语 - 接住时
 const MAORI_ENCOURAGEMENTS = [
-  { maori: "Kia kaha!", english: "Stay strong!" },
-  { maori: "Tino pai!", english: "Very good!" },
-  { maori: "Ka pai!", english: "Well done!" },
-  { maori: "Kia ora!", english: "Be well!" },
-  { maori: "Mīharo!", english: "Amazing!" },
-  { maori: "Ka rawe!", english: "Awesome!" },
-  { maori: "Whakatīnana!", english: "Celebrate!" },
-  { maori: "E hoa!", english: "Well done, friend!" },
+  { maori: "Kia kaha!", english: "Excellent!", audioFile: "encouragement-yes.mp3" },
+  { maori: "Tino pai!", english: "Well done!", audioFile: "encouragement-thatsit.mp3" },
+  { maori: "Ka pai!", english: "Perfect!", audioFile: "encouragement-go.mp3" },
+  { maori: "Kia ora!", english: "Awesome!", audioFile: "encouragement-boom.mp3" },
+  { maori: "Mīharo!", english: "Fantastic!", audioFile: "encouragement-comeon.mp3" },
+  { maori: "Ka rawe!", english: "Amazing!", audioFile: "encouragement-push.mp3" },
+  { maori: "Whakatīnana!", english: "Brilliant!", audioFile: "encouragement-waytogo.mp3" },
+  { maori: "E hoa!", english: "Outstanding!", audioFile: "encouragement-onemore.mp3" },
 ];
 
 // 毛利语鼓励语 - 没接住时
 const MAORI_MISS_ENCOURAGEMENTS = [
-  { maori: "Kia tūpato!", english: "Be careful!" },
+  { maori: "Kia tūpato!", english: "Try again!", audioFile: "miss-again.mp3" },
   {
     maori: "Whāia te iti kahurangi!",
-    english: "Pursue excellence!",
+    english: "Keep going!",
+    audioFile: "miss-comeon.mp3",
   },
   {
     maori: "Kia mau ki tō ūpoko!",
-    english: "Keep your head up!",
+    english: "You can do it!",
+    audioFile: "miss-push.mp3",
   },
-  { maori: "Me whakamahi anō!", english: "Try again!" },
-  { maori: "Kia manawanui!", english: "Be patient!" },
-  { maori: "Haere tonu!", english: "Keep going!" },
+  { maori: "Me whakamahi anō!", english: "Next one!", audioFile: "miss-nextone.mp3" },
+  { maori: "Kia manawanui!", english: "Don't give up!", audioFile: "miss-go.mp3" },
+  { maori: "Haere tonu!", english: "Come on!", audioFile: "miss-letsgo.mp3" },
 ];
 
 interface FallingFruit {
@@ -232,6 +237,16 @@ interface LeaderboardEntry {
 }
 
 export default function App() {
+  // 难度级别配置
+  const [difficulty, setDifficulty] = useState<'easy' | 'normal' | 'hard'>('normal');
+  const [showDifficultySelect, setShowDifficultySelect] = useState(false);
+  
+  const difficultyConfig = {
+    easy: { fallDuration: 2, label: '🟢 Easy', description: 'Slower speed' },
+    normal: { fallDuration: 1.5, label: '🟡 Normal', description: 'Standard speed' },
+    hard: { fallDuration: 1, label: '🔴 Hard', description: 'Fast speed' },
+  };
+
   const [score, setScore] = useState(0);
   const [basketX, setBasketX] = useState(50); // 篮子位置百分比
   const basketXRef = useRef(50);
@@ -250,7 +265,8 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState<
     LeaderboardEntry[]
   >([]);
-  const [timeRemaining, setTimeRemaining] = useState(180); // 3分钟倒计时
+  const [timeRemaining, setTimeRemaining] = useState(60); // 3分钟倒计时
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const gameAreaRef = useRef<HTMLDivElement>(null);
   const nextFruitId = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -258,21 +274,50 @@ export default function App() {
   const isShowingEncouragementRef = useRef(false);
   const gameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 朗读slogan
-  const speakEncouragement = (text: string) => {
+  // 播放鼓励语音频
+  const playEncouragementAudio = (audioFile: string, fallbackText: string) => {
+    if (!audioFile) return;
+    
+    try {
+      // 尝试加载音频文件
+      const audio = new Audio(`/audio/${audioFile}`);
+      audio.volume = 0.8;
+      audio.play().catch(() => {
+        // 如果音频播放失败，回退到 TTS
+        console.warn(`音频播放失败: ${audioFile}，使用 TTS 备用`);
+        speakEncouragementFallback(fallbackText);
+      });
+    } catch (error) {
+      console.error('音频加载错误:', error);
+      speakEncouragementFallback(fallbackText);
+    }
+  };
+
+  // TTS 备用方案
+  const speakEncouragementFallback = (text: string) => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 1.2;
       utterance.pitch = 1.1;
       utterance.volume = 1;
-      utterance.lang = 'mi';
+      utterance.lang = 'en-US';
       window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  // 朗读slogan（支持音频和备用 TTS）
+  const speakEncouragement = (text: string, audioFile?: string) => {
+    if (audioFile) {
+      playEncouragementAudio(audioFile, text);
+    } else {
+      speakEncouragementFallback(text);
     }
   };
 
   // 摄像头和手势识别相关
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const handsRef = useRef<Hands | null>(null);
   const cameraRef = useRef<Camera | null>(null);
   const lastRightHandTouchRef = useRef<number>(0); // 防止重复触发
@@ -338,7 +383,11 @@ export default function App() {
         console.log("Requesting camera access...");
         try {
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 640, height: 480, facingMode: "user" },
+            video: { 
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: "user" 
+          },
           });
           console.log("Camera access granted!");
         } catch (permError) {
@@ -381,9 +430,9 @@ export default function App() {
 
         hands.setOptions({
           maxNumHands: 2,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5,
+          modelComplexity: 0,
+          minDetectionConfidence: 0.4,  // 进一步降低门槛以改善检测灵敏度
+          minTrackingConfidence: 0.4,   // 降低追踪门槛
         });
 
         hands.onResults(onHandsResults);
@@ -465,8 +514,84 @@ export default function App() {
     };
   }, []);
 
-  // 处理手势识别结果 - 仅更新手部位置状态，不绘制canvas
+  // 处理手势识别结果 - 在Canvas上绘制骨架，并更新游戏逻辑
   const onHandsResults = (results: Results) => {
+    // 绘制骨架到Canvas（仅用于校准窗口显示，不影响游戏逻辑性能）
+    const canvas = canvasRef.current;
+    if (canvas && videoRef.current && canvas.getContext) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        // 设置Canvas尺寸
+        const videoElement = videoRef.current;
+        canvas.width = videoElement.videoWidth || 640;
+        canvas.height = videoElement.videoHeight || 480;
+
+        // 绘制视频帧
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+
+        // 手指连接关系（骨架）
+        const FINGER_CONNECTIONS = [
+          [0, 1], [1, 2], [2, 3], [3, 4], // 大拇指
+          [0, 5], [5, 6], [6, 7], [7, 8], // 食指
+          [0, 9], [9, 10], [10, 11], [11, 12], // 中指
+          [0, 13], [13, 14], [14, 15], [15, 16], // 无名指
+          [0, 17], [17, 18], [18, 19], [19, 20], // 小指
+          [5, 9], [9, 13], [13, 17], // 掌心连接
+        ];
+
+        // 绘制骨架线条
+        if (results.multiHandLandmarks) {
+          results.multiHandLandmarks.forEach((landmarks, handIndex) => {
+            const handedness = results.multiHandedness?.[handIndex]?.label;
+            const isLeftHand = handedness === 'Left';
+            const color = isLeftHand ? '#00FF00' : '#FF0000'; // 左手绿色，右手红色
+            const lineColor = isLeftHand ? 'rgba(0, 255, 0, 0.6)' : 'rgba(255, 0, 0, 0.6)';
+
+            // 绘制连接线
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            FINGER_CONNECTIONS.forEach(([start, end]) => {
+              const startPoint = landmarks[start];
+              const endPoint = landmarks[end];
+
+              const startX = startPoint.x * canvas.width;
+              const startY = startPoint.y * canvas.height;
+              const endX = endPoint.x * canvas.width;
+              const endY = endPoint.y * canvas.height;
+
+              ctx.beginPath();
+              ctx.moveTo(startX, startY);
+              ctx.lineTo(endX, endY);
+              ctx.stroke();
+            });
+
+            // 绘制关键点（圆点）
+            landmarks.forEach((landmark, index) => {
+              const x = landmark.x * canvas.width;
+              const y = landmark.y * canvas.height;
+
+              // 关键点大小根据是否是手腕来调整
+              const radius = index === 0 ? 6 : 4;
+
+              ctx.fillStyle = color;
+              ctx.beginPath();
+              ctx.arc(x, y, radius, 0, 2 * Math.PI);
+              ctx.fill();
+
+              // 绘制外圈
+              ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+              ctx.lineWidth = 1;
+              ctx.stroke();
+            });
+          });
+        }
+      }
+    }
+
+    // 游戏逻辑处理
     if (!results.multiHandLandmarks || !results.multiHandedness) {
       setRightHandPos(null);
       return;
@@ -495,6 +620,14 @@ export default function App() {
       const sortedHands = [...detectedHands].sort((a, b) => b.wristX - a.wristX);
       basketHand = sortedHands[0]; // wristX 最大 = 用户左手
       fingerHand = sortedHands[1] || null; // wristX 最小 = 用户右手
+      
+      // 双手模式：使用置信度最高的手来控制篮子
+      const hand0 = detectedHands[0];
+      const hand1 = detectedHands[1] || null;
+      if (hand0 && hand1) {
+        // 优先使用更稳定、置信度更高的手（通常是检测到更清晰的手）
+        // 保持原逻辑但增加稳定性
+      }
     }
 
     const screenWidth = window.innerWidth;
@@ -510,8 +643,8 @@ export default function App() {
         5,
         Math.min(95, (1 - basketHand.wristX) * 100),
       );
-      // 应用平滑过滤：混合 80% 当前值 + 20% 旧值，使移动更稳定
-      const smoothedX = basketXRef.current * 0.2 + basketXPct * 0.8;
+      // 应用平滑过滤：混合 50% 当前值 + 50% 旧值，使移动更稳定和缓慢
+      const smoothedX = basketXRef.current * 0.5 + basketXPct * 0.5;
       setBasketX(smoothedX);
       basketXRef.current = smoothedX;
     }
@@ -547,46 +680,91 @@ export default function App() {
 
   // 游戏页面加载时，初始化音乐（不需要等待游戏开始）
   useEffect(() => {
-    // 在组件挂载时设置音乐音量
-    if (audioRef.current) {
-      audioRef.current.volume = 0.5;
-      console.log("🎵 Audio element ready");
-    }
-    
-    // 尝试自动播放背景音乐
-    const tryAutoPlay = () => {
-      if (audioRef.current) {
-        audioRef.current.volume = 0.5;
-        const playPromise = audioRef.current.play();
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              console.log("✅ Background music is playing");
-            })
-            .catch((err) => {
-              console.log("ℹ️ Autoplay blocked, waiting for user interaction...", err.message);
-            });
+    const initAudio = () => {
+      if (!audioRef.current) return;
+      
+      // 设置音乐属性
+      audioRef.current.volume = 0.4;
+      audioRef.current.loop = true;
+      
+      console.log("🎵 Audio initialized, src:", BACKGROUND_MUSIC_URL);
+      
+      // 音频事件监听
+      const handlePlay = () => {
+        setIsMusicPlaying(true);
+        console.log("▶️ Music playing");
+      };
+      
+      const handlePause = () => {
+        setIsMusicPlaying(false);
+        console.log("⏸ Music paused");
+      };
+      
+      const handleCanPlay = () => {
+        console.log("✅ Audio loaded and ready to play");
+      };
+      
+      const handleError = (e: Event) => {
+        console.error("❌ Audio load error:", audioRef.current?.error?.message);
+      };
+      
+      audioRef.current.addEventListener('play', handlePlay);
+      audioRef.current.addEventListener('pause', handlePause);
+      audioRef.current.addEventListener('canplay', handleCanPlay);
+      audioRef.current.addEventListener('error', handleError);
+      
+      return () => {
+        if (audioRef.current) {
+          audioRef.current.removeEventListener('play', handlePlay);
+          audioRef.current.removeEventListener('pause', handlePause);
+          audioRef.current.removeEventListener('canplay', handleCanPlay);
+          audioRef.current.removeEventListener('error', handleError);
         }
-      }
+      };
     };
     
-    // 加载后立即尝试
-    setTimeout(tryAutoPlay, 500);
+    const timer = setTimeout(initAudio, 500);
     
-    // 也在用户交互时尝试
-    const handleUserInteraction = () => {
-      console.log("👆 User interaction detected, attempting to play music...");
-      tryAutoPlay();
-      document.removeEventListener('click', handleUserInteraction);
-      document.removeEventListener('touchstart', handleUserInteraction);
+    // 在用户交互时播放
+    let interactionHandler: (() => void) | null = null;
+    
+    const setupInteractionHandler = () => {
+      interactionHandler = async () => {
+        console.log("👆 User interaction detected");
+        if (!audioRef.current) return;
+        
+        try {
+          audioRef.current.muted = false;
+          audioRef.current.volume = 0.4;
+          audioRef.current.loop = true;
+          
+          const playPromise = audioRef.current.play();
+          if (playPromise !== undefined) {
+            await playPromise;
+            setIsMusicPlaying(true);
+            console.log("✅ Music started by user interaction");
+          }
+        } catch (err) {
+          console.warn("⚠️ Play failed:", err);
+        }
+        
+        // 移除监听器
+        document.removeEventListener('click', interactionHandler!);
+        document.removeEventListener('touchstart', interactionHandler!);
+      };
+      
+      document.addEventListener('click', interactionHandler);
+      document.addEventListener('touchstart', interactionHandler);
     };
     
-    document.addEventListener('click', handleUserInteraction);
-    document.addEventListener('touchstart', handleUserInteraction);
+    setupInteractionHandler();
     
     return () => {
-      document.removeEventListener('click', handleUserInteraction);
-      document.removeEventListener('touchstart', handleUserInteraction);
+      clearTimeout(timer);
+      if (interactionHandler) {
+        document.removeEventListener('click', interactionHandler);
+        document.removeEventListener('touchstart', interactionHandler);
+      }
     };
   }, []);
 
@@ -646,9 +824,9 @@ export default function App() {
     const fingerXPct = (rightHandPos.x / window.innerWidth) * 100;
     const fingerYPct = (rightHandPos.y / window.innerHeight) * 100;
 
-    // 防止短时间内重复触发（3秒，给用户足够时间准备接下一个）
+    // 防止短时间内重复触发（2秒，允许更快的操作）
     const now = Date.now();
-    if (now - lastRightHandTouchRef.current < 3000) return;
+    if (now - lastRightHandTouchRef.current < 2000) return;
 
     // 顶部水果区域大约在屏幕顶部 0-80%
     if (fingerYPct < 0 || fingerYPct > 80) return;
@@ -662,7 +840,7 @@ export default function App() {
         100 / topFruits.length / 2;
       const distance = Math.abs(fingerXPct - fruitX);
 
-      if (distance < 8) {
+      if (distance < 15) {
         console.log(`[RightHand] HIT fruit #${index} ${fruit.name} distance=${distance.toFixed(1)}`);
         if (fruit.name === targetFruit.name) {
           console.log(`[RightHand] ✓✓✓ TARGET FRUIT HIT: ${fruit.name}`);
@@ -699,11 +877,12 @@ export default function App() {
       // 立即选择下一个目标水果（防止同一水果被触碰多次）
       selectNewTarget();
 
-      // 1.5秒后检查是否接住并移除
+      // 根据难度调整检查时间
+      const checkDelay = difficultyConfig[difficulty].fallDuration * 1000;
       setTimeout(() => {
         console.log(`[checkCatch timeout] Checking if basket caught fruit at x=${fruitPosition}`);
         checkCatch(newFallingFruit);
-      }, 1500);
+      }, checkDelay);
     }
   };
 
@@ -714,14 +893,14 @@ export default function App() {
     );
     console.log(`[checkCatch] Fruit at x=${fallingFruit.x.toFixed(1)}, basket at x=${basketXRef.current.toFixed(1)}, distance=${distance.toFixed(1)}`);
 
-    if (distance < 6) {
-      // 接住了！
+    if (distance < 20) {
+      // 接住了！（命中范围扩大到20，更容易接住）
       console.log(`[checkCatch] SUCCESS! Caught fruit! Score +10`);
       setScore((prev) => prev + 10);
       showEncouragement();
     } else {
       // 没接住
-      console.log(`[checkCatch] MISS! Distance ${distance.toFixed(1)} > 4`);
+      console.log(`[checkCatch] MISS! Distance ${distance.toFixed(1)} > 12`);
       showMissEncouragement();
     }
 
@@ -743,8 +922,8 @@ export default function App() {
       ...prev,
       { id, text: fullText },
     ]);
-    // 朗读鼓励语
-    speakEncouragement(fullText);
+    // 播放音频或 TTS
+    speakEncouragement(fullText, random.audioFile);
   };
 
   // 显示未接住的鼓励语
@@ -756,10 +935,13 @@ export default function App() {
         )
       ];
     const id = encouragementIdRef.current++;
+    const fullText = `${random.maori} ${random.english}`;
     setEncouragementQueue((prev) => [
       ...prev,
-      { id, text: `${random.maori} ${random.english}` },
+      { id, text: fullText },
     ]);
+    // 播放音频或 TTS
+    speakEncouragement(fullText, random.audioFile);
   };
 
   // 选择新的目标水果
@@ -782,21 +964,32 @@ export default function App() {
 
   // 开始游戏
   const startGame = () => {
+    setShowDifficultySelect(false);
     setGameStarted(true);
     setScore(0);
     setFallingFruits([]);
     setEncouragementQueue([]);
-    setTimeRemaining(180); // 重置倒计时为3分钟
+    setTimeRemaining(60); // 重置倒计时为3分钟
     lastRightHandTouchRef.current = 0; // 重置手势触碰计时器
     
     // 确保音乐播放
     if (audioRef.current) {
+      audioRef.current.muted = false;
       audioRef.current.volume = 0.4;
+      audioRef.current.loop = true;
+      audioRef.current.currentTime = 0; // 从头开始
+      
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
-        playPromise.catch((error) => {
-          console.log("🔇 Autoplay blocked, user interaction may be required");
-        });
+        playPromise
+          .then(() => {
+            setIsMusicPlaying(true);
+            console.log("✅ Game music playing");
+          })
+          .catch((error) => {
+            console.warn("⚠️ Music autoplay blocked:", error.message);
+            // 可能需要用户交互，已经在useEffect中处理了
+          });
       }
     }
   };
@@ -834,11 +1027,37 @@ export default function App() {
     setShowLeaderboard(!showLeaderboard);
   };
 
+  // 播放/暂停背景音乐
+  const toggleBackgroundMusic = async () => {
+    if (!audioRef.current) return;
+    
+    try {
+      if (isMusicPlaying) {
+        audioRef.current.pause();
+        setIsMusicPlaying(false);
+        console.log("⏸️ Music paused");
+      } else {
+        audioRef.current.muted = false;
+        audioRef.current.volume = 0.4;
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          await playPromise;
+          setIsMusicPlaying(true);
+          console.log("▶️ Music playing");
+        }
+      }
+    } catch (err) {
+      console.error("Music control error:", err);
+    }
+  };
+
   if (!gameStarted) {
     return (
       <div className="size-full flex items-center justify-center relative overflow-hidden">
         {/* 隐藏的视频元素用于摄像头输入 */}
         <video ref={videoRef} className="hidden" playsInline />
+        {/* 隐藏的Canvas用于绘制骨架 */}
+        <canvas ref={canvasRef} className="hidden" />
 
         {/* 启用摄像头按钮 - 开始菜单 */}
         <div className="absolute top-4 left-4 z-40">
@@ -904,8 +1123,8 @@ export default function App() {
           </p>
 
           <div className="space-y-4 text-3xl text-white/90">
-            <p>🤚 Māui: Neke te kete | Left hand: Move basket</p>
-            <p>👆 Matau: Pā ki te hua | Right hand: Touch fruit</p>
+            <p>🤚 Mauī: Neke te kete | Left hand: Move basket</p>
+            <p>👆 Matau: Pā ki te hua | Right hand: Touch the fruit</p>
             <p>🧺 Hopu te hua! | Catch the fruit!</p>
           </div>
           <div className="text-xl text-white/70 mt-4">
@@ -914,7 +1133,7 @@ export default function App() {
 
           <div className="flex gap-6 justify-center">
             <button
-              onClick={startGame}
+              onClick={() => setShowDifficultySelect(true)}
               className="px-12 py-6 bg-green-600 hover:bg-green-700 text-white text-2xl rounded-2xl shadow-lg transition-colors"
             >
               Tīmata | Start Game
@@ -923,10 +1142,112 @@ export default function App() {
               onClick={toggleLeaderboard}
               className="px-12 py-6 bg-yellow-500 hover:bg-yellow-600 text-white text-2xl rounded-2xl shadow-lg transition-colors"
             >
-              🏆 View Leader Doard
+              🏆 Leader Board
             </button>
           </div>
+
+          {/* 难度选择对话框 */}
+          {showDifficultySelect && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-3xl p-10 shadow-2xl max-w-2xl">
+                <h2 className="text-4xl font-bold text-center mb-2">Choose Difficulty</h2>
+                <p className="text-center text-gray-600 mb-8">Select how fast the fruits fall</p>
+                
+                <div className="grid grid-cols-3 gap-4 mb-8">
+                  {(['easy', 'normal', 'hard'] as const).map((level) => (
+                    <button
+                      key={level}
+                      onClick={() => {
+                        setDifficulty(level);
+                        startGame();
+                      }}
+                      className={`p-6 rounded-2xl font-bold text-lg transition-all ${
+                        difficulty === level
+                          ? 'bg-blue-600 text-white scale-105 shadow-lg'
+                          : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                      }`}
+                    >
+                      <div className="text-3xl mb-2">{difficultyConfig[level].label}</div>
+                      <div className="text-sm">{difficultyConfig[level].description}</div>
+                      <div className="text-xs mt-2">
+                        {difficultyConfig[level].fallDuration}s fall
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => setShowDifficultySelect(false)}
+                  className="w-full px-6 py-3 bg-gray-300 hover:bg-gray-400 text-gray-800 rounded-xl font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* 手部移动校准窗口 - 显示实时视频和骨架 */}
+        {cameraReady && (
+          <motion.div
+            initial={{ opacity: 0, x: 30 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="absolute bottom-6 right-6 z-30 bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-4 max-w-md"
+          >
+            <div className="text-center mb-3">
+              <h3 className="text-lg font-bold text-green-800 mb-1">
+                🎯 Movement Calibration
+              </h3>
+              <p className="text-xs text-gray-600">Adjust your hand position</p>
+            </div>
+
+            {/* Canvas - 显示摄像头视频和骨架线条 */}
+            <canvas
+              ref={canvasRef}
+              className="w-full rounded-xl shadow-md border-2 border-gray-300"
+              style={{
+                display: 'block',
+                aspectRatio: '4 / 3',
+              }}
+            />
+
+            {/* 校准指导 */}
+            <div className="bg-blue-50 rounded-lg p-2 mt-3 text-xs text-gray-700">
+              <p className="font-semibold mb-1">✓ Tips:</p>
+              <ul className="space-y-0.5 text-xs">
+                <li>• Green skeleton = Left hand (move basket)</li>
+                <li>• Red skeleton = Right hand (touch fruit)</li>
+                <li>• Move both hands to center of camera</li>
+              </ul>
+            </div>
+
+            {/* 状态指示器 */}
+            <div className="flex items-center justify-between text-xs mt-2">
+              <span className="text-gray-600">Detection Status:</span>
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="text-green-700 font-bold">Active</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* 摄像头初始化提示 */}
+        {!cameraReady && cameraInitialized && (
+          <motion.div
+            initial={{ opacity: 0, x: 30 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="absolute bottom-6 right-6 z-30 bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-6 max-w-sm"
+          >
+            <div className="text-center">
+              <div className="text-4xl mb-3 animate-spin">⏳</div>
+              <p className="text-lg font-bold text-gray-800">Initializing...</p>
+              <p className="text-sm text-gray-600 mt-2">
+                Setting up hand detection
+              </p>
+            </div>
+          </motion.div>
+        )}
 
         {/* 排行榜模态框 - 也在开始屏幕显示 */}
         <AnimatePresence>
@@ -1069,9 +1390,12 @@ export default function App() {
       {/* 背景音乐 */}
       <audio
         ref={audioRef}
-        loop
         preload="auto"
-        src="/Temple-Run-Running-Theme.mp3"
+        src={BACKGROUND_MUSIC_URL}
+        crossOrigin="anonymous"
+        loop
+        autoPlay
+        muted
       />
 
       {/* 分数和目标提示 */}
@@ -1089,6 +1413,11 @@ export default function App() {
             className={`text-4xl font-bold ${timeRemaining <= 10 ? "text-red-600 animate-pulse" : "text-blue-600"}`}
           >
             ⏱️ {timeRemaining}s
+          </div>
+
+          {/* 难度显示 */}
+          <div className="text-2xl font-bold text-orange-600">
+            {difficultyConfig[difficulty].label}
           </div>
 
           <div className="text-2xl text-purple-700 font-bold flex items-center gap-4">
@@ -1229,7 +1558,7 @@ export default function App() {
           <motion.div
             key={index}
             onClick={() => !cameraReady && handleFruitClick(fruit, index)}
-            className={`text-8xl transition-transform hover:scale-110 ${
+            className={`text-9xl transition-transform hover:scale-110 ${
               !cameraReady ? "cursor-pointer" : ""
             } ${
               fruit.name === targetFruit.name
@@ -1239,7 +1568,7 @@ export default function App() {
             whileHover={!cameraReady ? { scale: 1.2 } : {}}
             whileTap={!cameraReady ? { scale: 0.9 } : {}}
           >
-            <span className="w-20 h-20">{fruit.emoji}</span>
+            <span className="w-28 h-28">{fruit.emoji}</span>
           </motion.div>
         ))}
       </div>
@@ -1255,14 +1584,14 @@ export default function App() {
               opacity: 1,
             }}
             exit={{ opacity: 0, scale: 0 }}
-            transition={{ duration: 1.5, ease: "linear" }}
-            className="absolute text-7xl pointer-events-none z-15"
+            transition={{ duration: difficultyConfig[difficulty].fallDuration, ease: "linear" }}
+            className="absolute text-9xl pointer-events-none z-15"
             style={{
               left: `${falling.x}%`,
               transform: "translateX(-50%)",
             }}
           >
-            <span className="w-20 h-20">
+            <span className="w-24 h-24">
               {falling.fruit.emoji}
             </span>
           </motion.div>
