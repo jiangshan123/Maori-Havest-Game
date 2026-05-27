@@ -175,7 +175,7 @@ const MAORI_BACKGROUND =
 
 // 背景音乐文件路径，交给打包器解析，确保部署后资源地址有效
 const BACKGROUND_MUSIC_URL = new URL(
-  "../desifreemusic-tribal-rhythm-patterns-with-bamboo-flute-376294.mp3",
+  "../../desifreemusic-tribal-rhythm-patterns-with-bamboo-flute-376294.mp3",
   import.meta.url,
 ).href;
 
