@@ -173,8 +173,11 @@ const BASKET_IMAGE =
 const MAORI_BACKGROUND =
   "https://media.easy-peasy.ai/27feb2bb-aeb4-4a83-9fb6-8f3f2a15885e/b79c1f25-f64f-40bd-acb0-b18f5ccb95de_medium.webp";
 
-// 背景音乐文件路径
-const BACKGROUND_MUSIC_URL = "/desifreemusic-tribal-rhythm-patterns-with-bamboo-flute-376294.mp3";
+// 背景音乐文件路径，交给打包器解析，确保部署后资源地址有效
+const BACKGROUND_MUSIC_URL = new URL(
+  "../desifreemusic-tribal-rhythm-patterns-with-bamboo-flute-376294.mp3",
+  import.meta.url,
+).href;
 
 // 新西兰本地水果 - 卡通图片
 const NZ_FRUITS = [
